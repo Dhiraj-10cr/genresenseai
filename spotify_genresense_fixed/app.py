@@ -505,13 +505,51 @@ def debug_peek():
     sample_rows = dataset_df[["track_name", "artists", "track_name_clean", "artists_clean"]].head(5).to_dict(orient="records")
     midnight_hits = int(dataset_df["track_name_clean"].str.contains("midnight city", na=False, regex=False).sum())
     m83_hits = int(dataset_df["artists_clean"].str.contains("m83", na=False, regex=False).sum())
+
+    # Run the EXACT same logic predict_by_name uses, in this same process,
+    # for the hardcoded "Midnight City" / "M83" query.
+    title_mask = dataset_df["track_name_clean"].str.contains("midnight city", na=False, regex=False)
+    artist_mask = dataset_df["artists_clean"].str.contains("m83", na=False, regex=False)
+    combined_mask = title_mask & artist_mask
+    combined_rows = dataset_df[combined_mask][["track_name", "artists"]].to_dict(orient="records")
+
     return jsonify({
         "row_count": len(dataset_df),
         "columns": list(dataset_df.columns),
         "sample_rows": sample_rows,
         "midnight_city_title_hits": midnight_hits,
-        "m83_artist_hits": m83_hits
+        "m83_artist_hits": m83_hits,
+        "combined_intersection_count": int(combined_mask.sum()),
+        "combined_intersection_rows": combined_rows
     })
+
+@app.route("/api/debug/search", methods=["GET"])
+def debug_search():
+    """TEMPORARY diagnostic route — test any song/artist via URL query params.
+    Example: /api/debug/search?song=Midnight City&artist=M83
+    """
+    global dataset_df
+    if dataset_df is None:
+        return jsonify({"error": "dataset_df is None"}), 503
+    song = request.args.get("song", "").strip().lower()
+    artist = request.args.get("artist", "").strip().lower()
+    if not song:
+        return jsonify({"error": "pass ?song=... (and optionally &artist=...)"}), 400
+    title_mask = dataset_df["track_name_clean"].str.contains(song, na=False, regex=False)
+    result = {
+        "query_song": song,
+        "query_artist": artist,
+        "title_only_hits": int(title_mask.sum())
+    }
+    if artist:
+        artist_mask = dataset_df["artists_clean"].str.contains(artist, na=False, regex=False)
+        combined = title_mask & artist_mask
+        result["artist_only_hits"] = int(artist_mask.sum())
+        result["combined_hits"] = int(combined.sum())
+        result["combined_rows"] = dataset_df[combined][["track_name", "artists"]].head(5).to_dict(orient="records")
+    else:
+        result["title_rows"] = dataset_df[title_mask][["track_name", "artists"]].head(5).to_dict(orient="records")
+    return jsonify(result)
 
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 5000))
