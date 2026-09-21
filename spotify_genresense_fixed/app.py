@@ -496,6 +496,23 @@ def dataset_stats():
         "total_training_samples": metadata.get("training_samples_count", 16000)
     })
 
+@app.route("/api/debug/peek", methods=["GET"])
+def debug_peek():
+    """TEMPORARY diagnostic route — remove after debugging."""
+    global dataset_df
+    if dataset_df is None:
+        return jsonify({"error": "dataset_df is None"}), 503
+    sample_rows = dataset_df[["track_name", "artists", "track_name_clean", "artists_clean"]].head(5).to_dict(orient="records")
+    midnight_hits = int(dataset_df["track_name_clean"].str.contains("midnight city", na=False, regex=False).sum())
+    m83_hits = int(dataset_df["artists_clean"].str.contains("m83", na=False, regex=False).sum())
+    return jsonify({
+        "row_count": len(dataset_df),
+        "columns": list(dataset_df.columns),
+        "sample_rows": sample_rows,
+        "midnight_city_title_hits": midnight_hits,
+        "m83_artist_hits": m83_hits
+    })
+
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 5000))
     app.run(host="0.0.0.0", port=port, debug=False)
