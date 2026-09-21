@@ -257,10 +257,16 @@ def predict_by_name():
     else:
         # Case-insensitive partial/substring match on track_name
         pattern = song_name.lower()
-        mask = dataset_df["track_name_clean"].str.contains(pattern, na=False, regex=False)
+        title_mask = dataset_df["track_name_clean"].str.contains(pattern, na=False, regex=False)
+        mask = title_mask
         if artist_name:
             artist_pat = artist_name.lower()
-            mask = mask & dataset_df["artists_clean"].str.contains(artist_pat, na=False, regex=False)
+            mask = title_mask & dataset_df["artists_clean"].str.contains(artist_pat, na=False, regex=False)
+            # If the title+artist combo matches nothing (e.g. stale/mismatched
+            # artist text), fall back to title-only matches instead of a
+            # flat "not found" — the user gets candidates to disambiguate.
+            if not mask.any() and title_mask.any():
+                mask = title_mask
         match_df = dataset_df[mask]
 
     # If no match found
