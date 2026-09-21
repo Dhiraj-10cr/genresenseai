@@ -774,8 +774,19 @@
         const artist = btn.getAttribute('data-artist');
         songNameInput.value = song;
         artistNameInput.value = artist || '';
+        lastAutoFillSong = song;
         searchSong(song, artist, true);
       });
+    });
+
+    // Clear stale artist text if the user edits the song name by hand,
+    // so a leftover artist from a previous preset/search doesn't silently
+    // block a new match.
+    let lastAutoFillSong = '';
+    songNameInput.addEventListener('input', () => {
+      if (songNameInput.value !== lastAutoFillSong) {
+        artistNameInput.value = '';
+      }
     });
 
     // Search Form Submit
@@ -995,6 +1006,7 @@
         const track = await res.json();
         songNameInput.value = track.track_name;
         artistNameInput.value = track.artist;
+        lastAutoFillSong = track.track_name;
         searchSong(track.track_name, track.artist, false);
       } catch (err) {
         console.error(err);
