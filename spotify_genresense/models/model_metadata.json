@@ -1,0 +1,47 @@
+{
+  "accuracy": 51.3,
+  "target_genres": [
+    "Classical / Ambient",
+    "Country / Folk",
+    "Electronic / Synth",
+    "Hip-Hop",
+    "Jazz / Soul",
+    "Latin / World",
+    "Pop",
+    "Rock / Alternative"
+  ],
+  "genre_icons": {
+    "Electronic / Synth": "\ud83c\udfa7",
+    "Pop": "\u2728",
+    "Hip-Hop": "\ud83c\udfa4",
+    "Rock / Alternative": "\ud83c\udfb8",
+    "Jazz / Soul": "\ud83c\udfb7",
+    "Classical / Ambient": "\ud83c\udfbb",
+    "Country / Folk": "\ud83e\ude95",
+    "Latin / World": "\ud83e\ude87",
+    "Other / Eclectic": "\ud83c\udfb5"
+  },
+  "feature_columns": [
+    "tempo",
+    "danceability",
+    "energy",
+    "loudness",
+    "duration_ms",
+    "valence",
+    "acousticness",
+    "speechiness",
+    "instrumentalness"
+  ],
+  "feature_importances": {
+    "tempo": 0.0949,
+    "danceability": 0.12,
+    "energy": 0.1158,
+    "loudness": 0.117,
+    "duration_ms": 0.1025,
+    "valence": 0.1029,
+    "acousticness": 0.1415,
+    "speechiness": 0.0973,
+    "instrumentalness": 0.1081
+  },
+  "training_samples_count": 16000
+}
