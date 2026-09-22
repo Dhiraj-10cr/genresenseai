@@ -244,70 +244,140 @@ def predict_by_name():
     if not song_name and not track_id:
         return jsonify({"found": False, "message": "Please enter a song name to search."}), 400
 
+    match_df = pd.DataFrame()
+
     # 1. Exact Track ID lookup if user picked a specific candidate with ID
     if track_id:
         match_df = dataset_df[dataset_df["track_id"] == track_id]
+
+    # 2. Exact Search (explicit exact requested)
     elif exact:
-        # User selected an exact track name + optional artist
-        match_df = dataset_df[dataset_df["track_name_clean"] == song_name.lower()]
-        if artist_name and not match_df.empty:
-            artist_sub = match_df[match_df["artists_clean"].str.contains(artist_name.lower(), na=False, regex=False)]
+        s_clean = song_name.lower().strip()
+        a_clean = artist_name.lower().strip()
+        match_df = dataset_df[dataset_df["track_name_clean"] == s_clean]
+        if a_clean and not match_df.empty:
+            artist_sub = match_df[match_df["artists_clean"].str.contains(a_clean, na=False, regex=False)]
             if not artist_sub.empty:
                 match_df = artist_sub
+        # If exact title wasn't found, fall back to substring
+        if match_df.empty:
+            match_df = dataset_df[dataset_df["track_name_clean"].str.contains(s_clean, na=False, regex=False)]
+            if a_clean and not match_df.empty:
+                artist_sub = match_df[match_df["artists_clean"].str.contains(a_clean, na=False, regex=False)]
+                if not artist_sub.empty:
+                    match_df = artist_sub
+
+    # 3. Multi-Stage Intelligent Search
     else:
-        # Case-insensitive partial/substring match on track_name
-        pattern = song_name.lower()
-        title_mask = dataset_df["track_name_clean"].str.contains(pattern, na=False, regex=False)
-        mask = title_mask
-        if artist_name:
-            artist_pat = artist_name.lower()
-            mask = title_mask & dataset_df["artists_clean"].str.contains(artist_pat, na=False, regex=False)
-            # If the title+artist combo matches nothing (e.g. stale/mismatched
-            # artist text), fall back to title-only matches instead of a
-            # flat "not found" — the user gets candidates to disambiguate.
-            if not mask.any() and title_mask.any():
-                mask = title_mask
-        match_df = dataset_df[mask]
+        s = song_name.lower().strip()
+        a = artist_name.lower().strip()
+
+        exact_title = dataset_df[dataset_df["track_name_clean"] == s]
+        sub_title = dataset_df[dataset_df["track_name_clean"].str.contains(s, na=False, regex=False)]
+
+        if a:
+            # User specified an artist filter
+            if not exact_title.empty:
+                art_exact = exact_title[exact_title["artists_clean"].str.contains(a, na=False, regex=False)]
+                if not art_exact.empty:
+                    match_df = art_exact
+            if match_df.empty and not sub_title.empty:
+                art_sub = sub_title[sub_title["artists_clean"].str.contains(a, na=False, regex=False)]
+                if not art_sub.empty:
+                    match_df = art_sub
+            if match_df.empty:
+                # If artist didn't match, fall back to exact or sub title
+                match_df = exact_title if not exact_title.empty else sub_title
+        else:
+            # No artist specified: check both title and artist
+            artist_matches = dataset_df[dataset_df["artists_clean"].str.contains(s, na=False, regex=False)]
+            exact_pop = exact_title["popularity"].max() if not exact_title.empty else 0
+            art_pop = artist_matches["popularity"].max() if not artist_matches.empty else 0
+
+            if exact_pop >= 30 and exact_pop >= art_pop - 15:
+                # Popular title match (e.g. Midnight City pop 76, Shape of You pop 86)
+                match_df = pd.concat([exact_title, sub_title, artist_matches]).drop_duplicates(subset=["track_id"])
+                is_exact = (match_df["track_name_clean"] == s).astype(int)
+                match_df = match_df.assign(_rank=is_exact)
+                match_df = match_df.sort_values(by=["_rank", "popularity"], ascending=[False, False]).drop(columns=["_rank"])
+            elif not artist_matches.empty:
+                # Artist query (e.g. Coldplay, Taylor Swift, Drake, Queen)
+                match_df = pd.concat([artist_matches, sub_title, exact_title]).drop_duplicates(subset=["track_id"])
+                match_df = match_df.sort_values(by=["popularity"], ascending=[False])
+            else:
+                match_df = sub_title.sort_values(by=["popularity"], ascending=[False])
+
+        # Stage 3: Split delimiter match (e.g. "Artist - Song", "Song - Artist", "Song by Artist")
+        if match_df.empty:
+            for sep in [" - ", " – ", " by "]:
+                if sep in s:
+                    p1, p2 = s.split(sep, 1)
+                    p1, p2 = p1.strip(), p2.strip()
+                    m1 = dataset_df[dataset_df["track_name_clean"].str.contains(p1, na=False, regex=False) &
+                                    dataset_df["artists_clean"].str.contains(p2, na=False, regex=False)]
+                    if not m1.empty:
+                        match_df = m1.sort_values(by="popularity", ascending=False)
+                        break
+                    m2 = dataset_df[dataset_df["track_name_clean"].str.contains(p2, na=False, regex=False) &
+                                    dataset_df["artists_clean"].str.contains(p1, na=False, regex=False)]
+                    if not m2.empty:
+                        match_df = m2.sort_values(by="popularity", ascending=False)
+                        break
+
+        # Stage 4: Multi-word token match across track_name and artists
+        if match_df.empty and " " in s:
+            words = [w for w in s.split() if len(w) > 2]
+            if words:
+                mask = pd.Series(True, index=dataset_df.index)
+                for w in words:
+                    mask = mask & (dataset_df["track_name_clean"].str.contains(w, na=False, regex=False) |
+                                   dataset_df["artists_clean"].str.contains(w, na=False, regex=False))
+                if mask.any():
+                    match_df = dataset_df[mask].sort_values(by="popularity", ascending=False)
 
     # If no match found
     if match_df.empty:
         return jsonify({
             "found": False,
-            "message": "Song not found in our database of 114,000 tracks. Try a different spelling or another song."
+            "message": "Song not found in our database of 114,000 tracks. Try a different title or select a verified track below.",
+            "suggestions": [
+                {"song_name": "Midnight City", "artist_name": "M83"},
+                {"song_name": "Shape of You", "artist_name": "Ed Sheeran"},
+                {"song_name": "Starboy", "artist_name": "The Weeknd"},
+                {"song_name": "Bohemian Rhapsody", "artist_name": "Queen"},
+                {"song_name": "Believer", "artist_name": "Imagine Dragons"},
+                {"song_name": "Tum Hi Ho", "artist_name": "Arijit Singh"}
+            ]
         })
 
-    # Sort matches by popularity descending to prioritize major tracks
-    match_df = match_df.sort_values(by="popularity", ascending=False)
+    # Ranking logic:
+    # 1. Exact title match priority (if popularity is significant, avoiding obscure tracks overriding major hits)
+    # 2. Popularity descending
+    s_query = song_name.lower().strip()
+    max_pop = match_df["popularity"].max() if not match_df.empty else 0
+    is_exact_title = (
+        (match_df["track_name_clean"] == s_query) & 
+        (match_df["popularity"] >= max_pop - 15)
+    ).astype(int)
+    match_df = match_df.assign(_exact_title=is_exact_title)
+    match_df = match_df.sort_values(by=["_exact_title", "popularity"], ascending=[False, False])
+    match_df = match_df.drop(columns=["_exact_title"])
 
     # De-duplicate candidate rows by (track_name, artists) to avoid repeating identical songs
     unique_candidates = match_df.drop_duplicates(subset=["track_name", "artists"])
 
-    # If multiple matches and not an explicit exact selection, return candidate list (up to 5)
-    if len(unique_candidates) > 1 and not exact and not track_id:
-        # Check if the top match is an EXACT track_name match AND artist matched if provided
-        exact_title_matches = unique_candidates[unique_candidates["track_name_clean"] == song_name.lower()]
-        
-        # If there's multiple candidates, return up to 5 for disambiguation
-        candidates = []
-        for _, row in unique_candidates.head(5).iterrows():
-            candidates.append({
-                "song_name": str(row["track_name"]),
-                "artist_name": str(row["artists"]),
-                "album_name": str(row["album_name"]),
-                "track_id": str(row["track_id"]),
-                "popularity": int(row["popularity"]) if pd.notna(row["popularity"]) else 0
-            })
-
-        # If user searched exact title and there is only 1 exact title match with high popularity,
-        # but other partial matches exist (e.g. remixes), if user didn't request exact, we still show candidate list
-        # so they can confirm original vs remix!
-        return jsonify({
-            "found": True,
-            "multiple": True,
-            "matches": candidates
+    # Prepare candidate list (up to 5) for disambiguation
+    candidates = []
+    for _, row in unique_candidates.head(5).iterrows():
+        candidates.append({
+            "song_name": str(row["track_name"]),
+            "artist_name": str(row["artists"]),
+            "album_name": str(row["album_name"]),
+            "track_id": str(row["track_id"]),
+            "popularity": int(row["popularity"]) if pd.notna(row["popularity"]) else 0
         })
 
-    # Exactly one match (or user selected exact candidate)
+    # Pick top match
     selected_row = unique_candidates.iloc[0]
     track_title = str(selected_row["track_name"])
     artist = str(selected_row["artists"])
@@ -339,9 +409,11 @@ def predict_by_name():
             track_label=f"{track_title} - {artist}"
         )
 
+        is_multiple = len(unique_candidates) > 1 and not exact and not track_id
+
         return jsonify({
             "found": True,
-            "multiple": False,
+            "multiple": is_multiple,
             "matched_song": {
                 "song_name": track_title,
                 "artist_name": artist,
@@ -355,7 +427,9 @@ def predict_by_name():
             "confidence": prediction_result["confidence"],
             "probabilities": prediction_result["probabilities"],
             "acoustic_signatures": prediction_result["acoustic_signatures"],
-            "features": prediction_result["features"]
+            "features": prediction_result["features"],
+            "matches": candidates,
+            "total_matches": len(unique_candidates)
         })
     except Exception as e:
         return jsonify({"error": str(e)}), 500
